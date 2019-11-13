@@ -1,0 +1,281 @@
+.org $0000 $7fff
+
+.goto $100 ; cartridge header must be at $100
+.cartridge
+.cartridge_title "AIV GAME"
+
+.goto $150 ; start of the program
+LD SP, $FFFE ; setup stack (note that $ffff is a register!)
+
+.define JOYSTICK $FF00
+
+.define RIGHT_AND_A 1
+.define LEFT 2
+.define UP 4
+.define DOWN 8
+
+.define PlayerY $FE00
+.define PlayerX $FE01
+
+.macro CreateSprite address pos_x pos_y tile attributes
+LD A, (pos_y)
+LD (address), A
+LD A, (pos_x)
+LD (address+1), A
+LD A,tile
+LD (address+2), A
+LD A, attributes
+LD (address+3), A
+.endmacro
+
+CALL turn_off_lcd
+
+LD HL, start_of_tiles
+LD BC, end_of_tiles-start_of_tiles
+LD DE, $8000 ; VRAM for tiles
+fill_tiles:
+LD A, (HL+)
+LD (DE), A
+INC DE
+DEC BC
+LD A, B
+OR C
+JR NZ, fill_tiles
+
+LD HL, start_of_map
+LD BC, end_of_map-start_of_map
+LD DE, $9800 ; VRAM for tiles
+fill_map:
+LD A, (HL+)
+LD (DE), A
+INC DE
+DEC BC
+LD A, B
+OR C
+JR NZ, fill_map
+
+LD HL, $FE00
+LD B, 159
+clear_oam:
+XOR A
+LD (HL+), A
+DEC B
+LD A, B
+JR NZ, clear_oam
+
+LD A, 16
+LD (player_x), A
+LD A, 24
+LD (player_y), A
+
+CreateSprite PlayerY player_x player_y 2 0
+
+
+LD A, %11010011
+LD ($ff40), A
+
+LD A, 0
+LD (bomb_dropped), A
+LD (vblank_counter), A
+LD (timer_bomb), A
+loop:
+CALL wait_for_vblank
+CALL checkInput
+CALL checkBombTimer
+CALL updatePlayer
+JP loop
+
+checkInput:
+LD A, %00100000
+LD (JOYSTICK), A
+LD (JOYSTICK), A
+LD (JOYSTICK), A
+LD A, (JOYSTICK)
+LD B, A
+AND RIGHT_AND_A
+CALL Z, move_right
+LD A, B
+AND LEFT
+CALL Z, move_left
+LD A, B
+AND UP
+CALL Z, move_up
+LD A, B
+AND DOWN
+CALL Z, move_down
+LD A, %00010000
+LD (JOYSTICK), A
+LD (JOYSTICK), A
+LD (JOYSTICK), A
+LD A, (JOYSTICK)
+LD B, A
+AND RIGHT_AND_A
+CALL Z, drop_bomb
+RET
+
+updatePlayer:
+LD A, (player_x)
+LD (PlayerX), A
+LD A, (player_y)
+LD (PlayerY), A
+RET
+
+move_right:
+LD A, (player_x)
+CP 152
+JR Z, no_move_right
+INC A
+LD (player_x), A
+no_move_right:
+LD A, (player_x)
+CP 80
+JR NC, scrolling_right
+RET
+
+move_left:
+LD A, (player_x)
+CP 16
+JR Z, no_move_left
+DEC A
+LD (player_x), A
+no_move_left:
+LD A, (player_x)
+CP 80
+JR C, scrolling_left
+RET
+
+move_up:
+LD A, (player_y)
+CP 24
+JR Z, no_move_up
+DEC A
+LD (player_y), A
+no_move_up:
+LD A, (player_y)
+CP 112
+JR C, scrolling_up
+RET
+
+move_down:
+LD A, (player_y)
+CP 144
+JR Z, no_move_down
+INC A
+LD (player_y), A
+no_move_down:
+LD A, (player_y)
+CP 112
+JR NC, scrolling_down
+RET
+
+scrolling_right:
+LD A, ($FF43)
+CP 96
+JR z, no_scroll_right
+INC A
+LD ($FF43), A
+LD A, ($fe05)
+DEC A
+LD ($fe05), A
+no_scroll_right:
+RET
+
+scrolling_left:
+LD A, ($FF43)
+CP 0
+JR z, no_scroll_left
+DEC A
+LD ($FF43), A
+LD A, ($fe05)
+INC A
+LD ($fe05), A
+no_scroll_left:
+RET
+
+scrolling_up:
+LD A, ($FF42)
+CP 0
+JR z, no_scroll_up
+DEC A
+LD ($FF42), A
+LD A, ($FE04)
+INC A
+LD ($FE04), A
+no_scroll_up:
+RET
+
+scrolling_down:
+LD A, ($FF42)
+CP 112
+JR z, no_scroll_down
+INC A
+LD ($FF42), A
+LD A, ($FE04)
+DEC A
+LD ($FE04), A
+no_scroll_down:
+RET
+
+wait_for_vblank:
+LD A, ($FF44) ; read register LY
+CP 144
+JR NZ, wait_for_vblank
+RET
+
+turn_off_lcd:
+CALL wait_for_vblank
+XOR A
+LD ($FF40), A ; write to register LCDC
+RET
+
+drop_bomb: 
+CreateSprite $fe04 player_x player_y 1 0
+LD A, 1
+LD (bomb_dropped), A
+RET
+
+checkBombTimer:
+LD A, (bomb_dropped)
+CP 0
+JR Z, notCount
+LD A, (vblank_counter)
+CP 60
+CALL NC, addSecond
+LD A, (vblank_counter)
+INC A 
+LD (vblank_counter), A
+notCount:
+RET
+
+addSecond:
+XOR A
+LD (vblank_counter), A
+LD A, (timer_bomb)
+CP 3
+JR NC, explode_bomb
+LD A, (timer_bomb)
+INC A
+LD (timer_bomb), A
+RET
+explode_bomb:
+LD A, 0
+LD ($FE04), A
+LD ($FE05), A
+XOR A
+LD (timer_bomb), A
+RET
+
+start_of_tiles:
+.tiles "BomberMan.gif"
+end_of_tiles:
+
+start_of_map:
+.inccsv "map001.csv"
+end_of_map:
+
+.org $C000 $CFFF
+player_x: .ram 8
+player_y: .ram 8
+bomb_dropped: .ram 8
+vblank_counter: .ram 8
+timer_bomb: .ram 8
